@@ -22,11 +22,11 @@ async def on_ready():
     print(f"✅ Bot {bot.user} tá online!")
     try:
         synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} comandos registrados!")
+        print(f"✅ {len(synced)} comandos prontos!")
     except Exception as e:
         print(f"❌ Erro: {e}")
 
-# === SISTEMA DE TICKET ===
+# === 1️⃣ SISTEMA DE TICKET ===
 @bot.tree.command(name="setup-ticket", description="Coloca o sistema de ticket neste canal")
 async def setup_ticket(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -103,7 +103,7 @@ async def setup_ticket(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, view=TicketAbrirView())
 
-# === SISTEMA DE PRODUTO COM COMPRAR ===
+# === 2️⃣ SISTEMA DE PRODUTO ===
 @bot.tree.command(name="novo-produto", description="Cadastra um produto novo")
 @app_commands.describe(
     nome="Nome do produto",
@@ -139,6 +139,11 @@ async def novo_produto(
     embed.add_field(name="💲 Preço Unitário", value=f"R$ {preco:.2f}", inline=True)
     embed.add_field(name="📦 Estoque Disponível", value=f"{estoque} unidades", inline=True)
     embed.add_field(name="💳 PIX", value=f"`{pix}`", inline=False)
+    embed.add_field(
+        name="📩 Como receber",
+        value="**Após pagar, abra um ticket para receber seu produto!**",
+        inline=False
+    )
     embed.set_footer(text=f"ID: {produto_id} — Clique abaixo para comprar")
     if imagem:
         embed.set_image(url=imagem)
@@ -200,29 +205,8 @@ async def novo_produto(
     await interaction.channel.send(embed=embed, view=ComprarView())
     await interaction.response.send_message("✅ Produto publicado!", ephemeral=True)
 
-# === LIMPAR SÓ O CANAL ATUAL — NÃO MEXE EM MAIS NADA! ===
-@bot.tree.command(name="limpar", description="Apaga mensagens SOMENTE neste canal")
-@app_commands.describe(quantidade="Número de mensagens para apagar (deixe vazio para apagar tudo)")
-async def limpar(interaction: discord.Interaction, quantidade: int = None):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-
-    # ✅ SÓ APAGA O CANAL QUE TU TÁ! NUNCA MAIS O SERVIDOR INTEIRO!
-    limite = quantidade if quantidade else None
-    await interaction.response.send_message("⚠️ Apagando mensagens...", ephemeral=True)
-    
-    deleted = await interaction.channel.purge(limit=limite)
-    await interaction.channel.send(
-        f"✅ Canal limpo! {len(deleted)} mensagens apagadas!\n"
-        f"📍 Canal: **{interaction.channel.name}** — Somente aqui!",
-        delete_after=5
-    )
-
-# === DAR CARGO DE CLIENTE ===
-@bot.tree.command(name="dar-cliente", description="Dá cargo de cliente e registra compra")
+# === 3️⃣ DAR CARGO DE CLIENTE ===
+@bot.tree.command(name="dar-cliente", description="Dá cargo de cliente e conta compra")
 @app_commands.describe(usuario="Pessoa que comprou")
 async def dar_cliente(interaction: discord.Interaction, usuario: discord.Member):
     cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
@@ -248,7 +232,7 @@ async def dar_cliente(interaction: discord.Interaction, usuario: discord.Member)
         ephemeral=False
     )
 
-# === RANKING ===
+# === 4️⃣ RANKING ===
 @bot.tree.command(name="ranking", description="Mostra quem mais comprou")
 async def ranking(interaction: discord.Interaction):
     if not compradores:
@@ -257,6 +241,7 @@ async def ranking(interaction: discord.Interaction):
 
     top = sorted(compradores.items(), key=lambda x: x[1], reverse=True)[:10]
     embed = discord.Embed(title="🏆 RANKING — MAIS COMPRARAM", color=discord.Color.gold())
+    embed.set_footer(text="ARTHURMODS — Top 10 Compradores")
     for pos, (user_id, qtd) in enumerate(top, 1):
         user = await bot.fetch_user(user_id)
         medalha = {1: "🥇", 2: "🥈", 3: "🥉"}.get(pos, f"{pos}°")
@@ -267,7 +252,23 @@ async def ranking(interaction: discord.Interaction):
         )
     await interaction.response.send_message(embed=embed)
 
-# === ANTI-PALAVRÃO ===
+# === 5️⃣ LIMPAR CANAL ===
+@bot.tree.command(name="limpar", description="Apaga TUDO somente neste canal")
+async def limpar(interaction: discord.Interaction):
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    if not tem_permissao:
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return
+
+    await interaction.response.send_message("⚠️ Apagando TUDO deste canal...", ephemeral=True)
+    deleted = await interaction.channel.purge(limit=None)
+    await interaction.channel.send(
+        f"✅ **Canal limpo!**\n📍 Canal: **{interaction.channel.name}**\n📝 {len(deleted)} mensagens apagadas!",
+        delete_after=5
+    )
+
+# === 6️⃣ ANTI-PALAVRÃO ===
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
@@ -275,6 +276,7 @@ async def on_message(message):
     cargo_sup = discord.utils.get(message.guild.roles, name=NOME_CARGO_SUPORTE)
     if cargo_sup and cargo_sup in message.author.roles:
         return
+
     texto = message.content.lower()
     for palavra in palavras_proibidas:
         if re.search(re.escape(palavra.lower()), texto):
@@ -310,8 +312,8 @@ async def desbloquear_palavra(interaction: discord.Interaction, palavra: str):
     palavras_proibidas.discard(palavra.lower())
     await interaction.response.send_message(f"✅ Palavra **'{palavra}'** liberada!", ephemeral=True)
 
-# === LISTAR PALAVRAS ===
-@bot.tree.command(name="lista-bloqueadas", description="Mostra palavras bloqueadas")
+# === LISTAR PALAVRAS BLOQUEADAS ===
+@bot.tree.command(name="lista-bloqueadas", description="Mostra todas as palavras bloqueadas")
 async def lista_bloqueadas(interaction: discord.Interaction):
     cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
     tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
