@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
 
@@ -7,49 +8,28 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-produtos = {}
-chaves = {}
-
 @bot.event
 async def on_ready():
-    print(f"✅ Bot conectado como {bot.user}")
-    print("🔥 Sistema de Vendas Ativo!")
+    print(f"✅ Bot {bot.user} tá online!")
+    # Registra os comandos
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} comandos registrados!")
+    except Exception as e:
+        print(f"❌ Erro ao registrar: {e}")
 
-@bot.command(name="criar_produto")
-async def criar_produto(ctx, nome, preco):
-    produtos[nome] = {"preco": preco, "dono": ctx.author.id}
-    await ctx.send(f"✅ Produto **{nome}** criado! Preço: R$ {preco}")
+# Coloca SEUS comandos aqui
+@bot.tree.command(name="setup-ticket", description="Cria o sistema de ticket")
+async def setup_ticket(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Sistema de ticket configurado!", ephemeral=True)
 
-@bot.command(name="gerar_chave")
-async def gerar_chave(ctx, nome_produto):
-    if nome_produto in produtos:
-        import random, string
-        chave = f"ARTHUR-{nome_produto}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=6))}"
-        chaves[chave] = {"produto": nome_produto, "comprador": ctx.author.id}
-        await ctx.author.send(f"🔑 Sua chave: `{chave}`\nProduto: {nome_produto}")
-        await ctx.send(f"✅ Chave gerada e enviada por mensagem privada!")
-    else:
-        await ctx.send("❌ Produto não encontrado!")
+@bot.tree.command(name="produto", description="Ver produto")
+async def produto(interaction: discord.Interaction):
+    await interaction.response.send_message("📦 Produtos disponíveis...", ephemeral=False)
 
-@bot.command(name="validar")
-async def validar(ctx, chave):
-    if chave in chaves:
-        await ctx.send(f"✅ Chave VÁLIDA!\nProduto: {chaves[chave]['produto']}")
-    else:
-        await ctx.send("❌ Chave INVÁLIDA ou não existe!")
-
-@bot.command(name="lista_produtos")
-async def lista_produtos(ctx):
-    if produtos:
-        msg = "📦 Produtos disponíveis:\n"
-        for nome, dados in produtos.items():
-            msg += f"• {nome} — R$ {dados['preco']}\n"
-        await ctx.send(msg)
-    else:
-        await ctx.send("📭 Nenhum produto cadastrado!")
-
-TOKEN = os.getenv("DISCORD_TOKEN")
-if TOKEN:
-    bot.run(TOKEN)
+# Token
+token = os.getenv("DISCORD_TOKEN")
+if token:
+    await bot.start(token)
 else:
-    print("⚠️ Coloque seu token nas variáveis do Render!")
+    print("❌ Token não encontrado!")
