@@ -1,10 +1,9 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os
-import re
 import json
-import asyncio
+import os
+from datetime import datetime
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -12,334 +11,200 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# === ONDE VAI FICAR SALVO TUDO ===
+PASTA_DADOS = "dados_sistema"
+ARQUIVO_TICKETS = os.path.join(PASTA_DADOS, "tickets_salvos.json")
+ARQUIVO_PRODUTOS = os.path.join(PASTA_DADOS, "produtos_salvos.json")
+ARQUIVO_COMPRAS = os.path.join(PASTA_DADOS, "compras_salvas.json")
+
+# === CRIAR PASTA SE NÃO EXISTIR ===
+if not os.path.exists(PASTA_DADOS):
+    os.makedirs(PASTA_DADOS)
+    print(f"📁 Pasta criada: {PASTA_DADOS}")
+
+# === CARREGAR DADOS SALVOS ===
+def carregar(arquivo, padrao):
+    if os.path.exists(arquivo):
+        with open(arquivo, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return padrao
+
+tickets = carregar(ARQUIVO_TICKETS, [])
+produtos = carregar(ARQUIVO_PRODUTOS, {})
+compras = carregar(ARQUIVO_COMPRAS, {})
+
+# === SALVAR E MOSTRAR NO RENDER ===
+def salvar_ticket(dados):
+    tickets.append(dados)
+    with open(ARQUIVO_TICKETS, "w", encoding="utf-8") as f:
+        json.dump(tickets, f, ensure_ascii=False, indent=2)
+    print(f"\n🎫 TICKET CRIADO E SALVO ✅")
+    print(f"   Usuário: {dados['usuario_nome']}")
+    print(f"   Canal: {dados['canal_nome']}")
+    print(f"   ID Canal: {dados['canal_id']}")
+    print(f"   Data: {dados['data']}")
+    print(f"   Arquivo: {ARQUIVO_TICKETS}\n")
+
+def salvar_produto(dados):
+    produtos[dados["id"]] = dados
+    with open(ARQUIVO_PRODUTOS, "w", encoding="utf-8") as f:
+        json.dump(produtos, f, ensure_ascii=False, indent=2)
+    print(f"\n📦 PRODUTO CRIADO E SALVO ✅")
+    print(f"   ID: {dados['id']}")
+    print(f"   Nome: {dados['nome']}")
+    print(f"   Preço: R$ {dados['preco']:.2f}")
+    print(f"   Estoque: {dados['estoque']}")
+    print(f"   Arquivo: {ARQUIVO_PRODUTOS}\n")
+
+def salvar_compra(dados):
+    compras[dados["usuario_id"]] = compras.get(dados["usuario_id"], 0) + 1
+    with open(ARQUIVO_COMPRAS, "w", encoding="utf-8") as f:
+        json.dump(compras, f, ensure_ascii=False, indent=2)
+    print(f"\n🛒 COMPRA REGISTRADA E SALVA ✅")
+    print(f"   Usuário: {dados['usuario_nome']}")
+    print(f"   Total: {compras[dados['usuario_id']]}")
+    print(f"   Arquivo: {ARQUIVO_COMPRAS}\n")
+
 # === CONFIGURAÇÕES ===
-NOME_CARGO_SUPORTE = "Suporte"
-NOME_CARGO_CLIENTE = "Cliente VIP"
-ARQUIVO_DADOS = "dados_bot.json"
+NOME_SUPORTE = "Suporte"
+NOME_CLIENTE = "Cliente VIP"
 
-# === CARREGAR E SALVAR ===
-def carregar_dados():
-    if os.path.exists(ARQUIVO_DADOS):
-        with open(ARQUIVO_DADOS, "r", encoding="utf-8") as f:
-            dados = json.load(f)
-            return (
-                set(dados.get("palavras_proibidas", [])),
-                dados.get("compradores", {}),
-                dados.get("produtos", {})
-            )
-    return set(), {}, {}
-
-def salvar_dados():
-    dados = {
-        "palavras_proibidas": list(palavras_proibidas),
-        "compradores": compradores,
-        "produtos": produtos
-    }
-    with open(ARQUIVO_DADOS, "w", encoding="utf-8") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
-
-palavras_proibidas, compradores, produtos = carregar_dados()
-
-# === LIGAR SEM DEMORAR ===
 @bot.event
 async def on_ready():
-    print(f"✅ Bot {bot.user} tá online!")
-    print(f"📦 {len(produtos)} produtos | 👤 {len(compradores)} compradores")
+    print(f"\n{'='*50}")
+    print(f"✅ BOT ONLINE — {bot.user}")
+    print(f"📦 Produtos salvos: {len(produtos)}")
+    print(f"🎫 Tickets salvos: {len(tickets)}")
+    print(f"👤 Compradores salvos: {len(compras)}")
+    print(f"📂 Pasta de dados: {PASTA_DADOS}/")
+    print(f"{'='*50}\n")
     
-    # Sincroniza DEPOIS que o bot já respondeu — não dá mais erro de tempo!
-    await asyncio.sleep(2)
     try:
         synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} comandos prontos!")
+        print(f"✅ {len(synced)} comandos prontos!\n")
     except Exception as e:
-        print(f"⚠️ Sincronização: {e} — mas bot tá funcionando!")
+        print(f"⚠️ Sincronização: {e}\n")
 
-# === 1️⃣ TICKET — RESPOSTA RÁPIDA ===
-@bot.tree.command(name="setup-ticket", description="Coloca o sistema de ticket neste canal")
-async def setup_ticket(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🎫 Atendimento",
-        description="Clique no botão abaixo para abrir seu ticket!",
-        color=discord.Color.purple()
-    )
-    embed.set_footer(text="ARTHURMODS — Atendimento")
-
-    class TicketAbrirView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-
-        @discord.ui.button(label="Abrir Ticket", style=discord.ButtonStyle.green, emoji="🎫", custom_id="abrir_ticket_novo")
-        async def abrir_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-            # Responde PRIMEIRO — não dá erro de tempo!
-            await interaction.response.defer(ephemeral=True)
-            
-            # Verifica se já tem aberto
-            for canal in interaction.guild.channels:
-                if isinstance(canal, discord.TextChannel) and canal.topic == f"Ticket de {interaction.user.name}":
-                    await interaction.followup.send(
-                        f"⚠️ Você já tem um ticket aberto: {canal.mention}",
-                        ephemeral=True
-                    )
-                    return
-
-            cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-            overwrites = {
-                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            }
-            if cargo_suporte:
-                overwrites[cargo_suporte] = discord.PermissionOverwrite(
-                    read_messages=True, send_messages=True, manage_messages=True
-                )
-
-            canal_ticket = await interaction.guild.create_text_channel(
-                name=f"ticket-{interaction.user.name}",
-                topic=f"Ticket de {interaction.user.name}",
-                overwrites=overwrites
-            )
-
-            e_equipe = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
-            if e_equipe:
-                embed_interno = discord.Embed(
-                    title="🛡️ TICKET — EQUIPE",
-                    description=f"Abrido por: {interaction.user.mention}\nFunção: **Equipe/Suporte**",
-                    color=discord.Color.blue()
-                )
-            else:
-                embed_interno = discord.Embed(
-                    title="🎫 TICKET — CLIENTE",
-                    description=f"Olá {interaction.user.mention}!\nExplique o que precisa que a equipe vai atender! 📩",
-                    color=discord.Color.green()
-                )
-
-            class TicketFecharView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=None)
-
-                @discord.ui.button(label="Fechar Ticket", style=discord.ButtonStyle.red, emoji="🔒", custom_id="fechar_ticket")
-                async def fechar_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-                    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-                    e_equipe_agora = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-                    e_dono = interaction.user.name in (canal_ticket.topic or "")
-                    if not (e_dono or e_equipe_agora):
-                        await interaction.response.send_message("❌ Apenas a equipe ou quem abriu pode fechar!", ephemeral=True)
-                        return
-                    await interaction.response.send_message("✅ Fechando...", ephemeral=True)
-                    await canal_ticket.delete(reason=f"Fechado por {interaction.user}")
-
-            await canal_ticket.send(embed=embed_interno, view=TicketFecharView())
-            if cargo_suporte and not e_equipe:
-                await canal_ticket.send(f"{cargo_suporte.mention} — Novo ticket aberto!")
-            
-            await interaction.followup.send(f"✅ Ticket criado! → {canal_ticket.mention}", ephemeral=True)
-
-    await interaction.response.send_message(embed=embed, view=TicketAbrirView())
-
-# === 2️⃣ PRODUTO ===
-@bot.tree.command(name="novo-produto", description="Cadastra um produto novo")
-@app_commands.describe(
-    nome="Nome do produto",
-    preco="Preço unitário (ex: 50 ou 2.50)",
-    estoque="Quantidade disponível",
-    pix="Chave PIX para pagamento",
-    imagem="Link da foto (opcional)"
-)
-async def novo_produto(
-    interaction: discord.Interaction,
-    nome: str,
-    preco: float,
-    estoque: int,
-    pix: str,
-    imagem: str = None
-):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Apenas a Equipe pode cadastrar produtos!", ephemeral=True)
-        return
-
-    produto_id = f"prod_{len(produtos) + 1}"
-    produtos[produto_id] = {
-        "nome": nome, "preco": preco, "estoque": estoque, "pix": pix, "imagem": imagem
+# === 1️⃣ ABRIR TICKET — SALVA TUDO ===
+@bot.tree.command(name="abrir-ticket", description="Abrir atendimento")
+async def abrir_ticket(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    
+    # Verificar se já tem aberto
+    for canal in interaction.guild.channels:
+        if isinstance(canal, discord.TextChannel) and canal.topic == f"Ticket de {interaction.user.name}":
+            await interaction.followup.send(f"⚠️ Já tem aberto: {canal.mention}", ephemeral=True)
+            return
+    
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_SUPORTE)
+    perm = {
+        interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        bot.user: discord.PermissionOverwrite(read_messages=True)
     }
-    salvar_dados()
-
-    embed = discord.Embed(title=f"📦 {nome}", color=discord.Color.green())
-    embed.add_field(name="💲 Preço Unitário", value=f"R$ {preco:.2f}", inline=True)
-    embed.add_field(name="📦 Estoque Disponível", value=f"{estoque} unidades", inline=True)
-    embed.add_field(name="💳 PIX", value=f"`{pix}`", inline=False)
-    embed.add_field(
-        name="📩 Como receber",
-        value="**Após pagar, abra um ticket para receber seu produto!**",
-        inline=False
+    if cargo_sup:
+        perm[cargo_sup] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    
+    canal_ticket = await interaction.guild.create_text_channel(
+        f"ticket-{interaction.user.name}",
+        topic=f"Ticket de {interaction.user.name}",
+        overwrites=perm
     )
-    embed.set_footer(text=f"ID: {produto_id} — Salvo automaticamente")
+    
+    # SALVAR TICKET E MOSTRAR NO RENDER
+    dados_ticket = {
+        "usuario_nome": interaction.user.name,
+        "usuario_id": interaction.user.id,
+        "canal_nome": canal_ticket.name,
+        "canal_id": canal_ticket.id,
+        "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        "status": "aberto"
+    }
+    salvar_ticket(dados_ticket)
+    
+    await canal_ticket.send(f"✅ Bem-vindo, {interaction.user.mention}!\nExplique o que precisa.")
+    if cargo_sup:
+        await canal_ticket.send(f"{cargo_sup.mention} — Novo ticket!")
+    
+    await interaction.followup.send(f"✅ Criado: {canal_ticket.mention}", ephemeral=True)
+
+# === 2️⃣ CADASTRAR PRODUTO — SALVA TUDO ===
+@bot.tree.command(name="novo-produto", description="Cadastrar produto")
+@app_commands.describe(nome="Nome", preco="Valor", estoque="Quantidade", pix="Chave PIX", imagem="Link da foto")
+async def novo_produto(inter: discord.Interaction, nome: str, preco: float, estoque: int, pix: str, imagem: str=None):
+    cargo_sup = discord.utils.get(inter.guild.roles, name=NOME_SUPORTE)
+    if not ((cargo_sup and cargo_sup in inter.user.roles) or inter.user.guild_permissions.administrator):
+        await inter.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return
+    
+    pid = f"prod_{len(produtos)+1}"
+    dados_produto = {
+        "id": pid,
+        "nome": nome,
+        "preco": preco,
+        "estoque": estoque,
+        "pix": pix,
+        "imagem": imagem,
+        "criado_por": inter.user.name,
+        "data_criacao": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    }
+    
+    salvar_produto(dados_produto)
+    
+    emb = discord.Embed(title=f"📦 {nome}", color=discord.Color.green())
+    emb.add_field(name="Preço", value=f"R$ {preco:.2f}", inline=True)
+    emb.add_field(name="Estoque", value=f"{estoque} unidades", inline=True)
+    emb.add_field(name="PIX", value=f"`{pix}`", inline=False)
+    emb.set_footer(text=f"ID: {pid} — Salvo em dados_sistema/")
     if imagem:
-        embed.set_image(url=imagem)
+        emb.set_image(url=imagem)
+    
+    await inter.channel.send(embed=emb)
+    await inter.response.send_message("✅ Produto salvo! 💾", ephemeral=True)
 
-    class ComprarView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-
-        @discord.ui.button(label="🛒 Comprar Agora", style=discord.ButtonStyle.green, custom_id=f"comprar_{produto_id}")
-        async def comprar(self, interaction: discord.Interaction, button: discord.ui.Button):
-            prod = produtos.get(produto_id)
-            if not prod or prod["estoque"] <= 0:
-                await interaction.response.send_message("❌ Produto esgotado!", ephemeral=True)
-                return
-
-            class QuantidadeModal(discord.ui.Modal, title="Quantidade"):
-                quantidade = discord.ui.TextInput(
-                    label="Quantas unidades você quer?",
-                    placeholder=f"Disponível: {prod['estoque']}",
-                    min_length=1, max_length=2, required=True
-                )
-                async def on_submit(self, modal_interaction: discord.Interaction):
-                    try:
-                        qtd = int(self.quantidade.value)
-                    except ValueError:
-                        await modal_interaction.response.send_message("❌ Digite apenas números!", ephemeral=True)
-                        return
-                    if qtd <= 0:
-                        await modal_interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
-                        return
-                    if qtd > prod["estoque"]:
-                        await modal_interaction.response.send_message(
-                            f"❌ Só temos {prod['estoque']} unidades disponíveis!", ephemeral=True
-                        )
-                        return
-                    total = prod["preco"] * qtd
-                    prod["estoque"] -= qtd
-                    salvar_dados()
-                    embed_pagamento = discord.Embed(title="✅ PEDIDO REALIZADO", color=discord.Color.gold())
-                    embed_pagamento.add_field(name="📦 Produto", value=prod["nome"], inline=False)
-                    embed_pagamento.add_field(name="🔢 Quantidade", value=f"{qtd} unidade{'s' if qtd>1 else ''}", inline=True)
-                    embed_pagamento.add_field(name="💲 Valor Unitário", value=f"R$ {prod['preco']:.2f}", inline=True)
-                    embed_pagamento.add_field(name="💰 TOTAL A PAGAR", value=f"**R$ {total:.2f}**", inline=False)
-                    embed_pagamento.add_field(name="💳 Chave PIX", value=f"`{prod['pix']}`", inline=False)
-                    embed_pagamento.add_field(
-                        name="📩 Instruções",
-                        value="Após pagar, abra um ticket e envie o comprovante!",
-                        inline=False
-                    )
-                    await modal_interaction.response.send_message(embed=embed_pagamento, ephemeral=True)
-
-            await interaction.response.send_modal(QuantidadeModal())
-
-    await interaction.channel.send(embed=embed, view=ComprarView())
-    await interaction.response.send_message("✅ Produto publicado e salvo! 💾", ephemeral=True)
-
-# === 3️⃣ DAR CLIENTE ===
-@bot.tree.command(name="dar-cliente", description="Dá cargo de cliente e conta compra")
-@app_commands.describe(usuario="Pessoa que comprou")
-async def dar_cliente(interaction: discord.Interaction, usuario: discord.Member):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+# === 3️⃣ DAR CLIENTE — SALVA COMPRA ===
+@bot.tree.command(name="dar-cliente", description="Registrar compra")
+@app_commands.describe(usuario="Quem comprou")
+async def dar_cliente(inter: discord.Interaction, usuario: discord.Member):
+    cargo_sup = discord.utils.get(inter.guild.roles, name=NOME_SUPORTE)
+    if not ((cargo_sup and cargo_sup in inter.user.roles) or inter.user.guild_permissions.administrator):
+        await inter.response.send_message("❌ Sem permissão!", ephemeral=True)
         return
-    cargo_cliente = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_CLIENTE)
-    if not cargo_cliente:
-        await interaction.response.send_message(
-            f"⚠️ Cria o cargo **'{NOME_CARGO_CLIENTE}'** primeiro no Discord!", ephemeral=True
-        )
+    
+    cargo_cli = discord.utils.get(inter.guild.roles, name=NOME_CLIENTE)
+    if not cargo_cli:
+        await inter.response.send_message(f"⚠️ Cria o cargo '{NOME_CLIENTE}'!", ephemeral=True)
         return
-    if cargo_cliente not in usuario.roles:
-        await usuario.add_roles(cargo_cliente)
-    compradores[usuario.id] = compradores.get(usuario.id, 0) + 1
-    salvar_dados()
-    await interaction.response.send_message(
-        f"✅ {usuario.mention} recebeu o cargo!\n🛒 Total: **{compradores[usuario.id]}**", ephemeral=False
+    
+    if cargo_cli not in usuario.roles:
+        await usuario.add_roles(cargo_cli)
+    
+    dados_compra = {
+        "usuario_nome": usuario.name,
+        "usuario_id": usuario.id
+    }
+    salvar_compra(dados_compra)
+    
+    await inter.response.send_message(
+        f"✅ {usuario.mention}\n🛒 Total: {compras[usuario.id]}\n💾 Salvo!",
+        ephemeral=False
     )
 
 # === 4️⃣ RANKING ===
-@bot.tree.command(name="ranking", description="Mostra quem mais comprou")
-async def ranking(interaction: discord.Interaction):
-    if not compradores:
-        await interaction.response.send_message("📋 Nenhuma compra registrada ainda!", ephemeral=True)
+@bot.tree.command(name="ranking", description="Ver ranking de compras")
+async def ranking(inter: discord.Interaction):
+    if not compras:
+        await inter.response.send_message("📋 Nenhuma compra ainda!", ephemeral=True)
         return
-    top = sorted(compradores.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="🏆 RANKING — MAIS COMPRARAM", color=discord.Color.gold())
-    for pos, (user_id, qtd) in enumerate(top, 1):
-        user = await bot.fetch_user(user_id)
-        medalha = {1: "🥇", 2: "🥈", 3: "🥉"}.get(pos, f"{pos}°")
-        embed.add_field(name=f"{medalha} {user.name}", value=f"🛒 {qtd} compra{'s' if qtd>1 else ''}", inline=False)
-    await interaction.response.send_message(embed=embed)
+    top = sorted(compras.items(), key=lambda x: x[1], reverse=True)[:10]
+    emb = discord.Embed(title="🏆 RANKING", color=discord.Color.gold())
+    for pos, (uid, qtd) in enumerate(top, 1):
+        user = await bot.fetch_user(uid)
+        med = {1:"🥇",2:"🥈",3:"🥉"}.get(pos, f"{pos}°")
+        emb.add_field(name=f"{med} {user.name}", value=f"🛒 {qtd} compra{'s' if qtd>1 else ''}", inline=False)
+    await inter.response.send_message(embed=emb)
 
-# === 5️⃣ LIMPAR ===
-@bot.tree.command(name="limpar", description="Apaga TUDO somente neste canal")
-async def limpar(interaction: discord.Interaction):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-    await interaction.response.send_message("⚠️ Apagando mensagens...", ephemeral=True)
-    deleted = await interaction.channel.purge(limit=None)
-    await interaction.channel.send(
-        f"✅ Canal limpo!\n📍 {interaction.channel.name}\n📝 {len(deleted)} mensagens", delete_after=5
-    )
-
-# === 6️⃣ ANTI-PALAVRÃO ===
-@bot.event
-async def on_message(message):
-    if message.author.bot or not message.guild:
-        return
-    cargo_sup = discord.utils.get(message.guild.roles, name=NOME_CARGO_SUPORTE)
-    if cargo_sup and cargo_sup in message.author.roles:
-        return
-    texto = message.content.lower()
-    for palavra in palavras_proibidas:
-        if re.search(re.escape(palavra.lower()), texto):
-            await message.delete()
-            await message.channel.send(
-                f"{message.author.mention} ⚠️ Palavra proibida!", delete_after=3
-            )
-            break
-    await bot.process_commands(message)
-
-# === BLOQUEAR PALAVRA ===
-@bot.tree.command(name="bloquear-palavra", description="Bloqueia uma palavra")
-@app_commands.describe(palavra="Palavra proibida")
-async def bloquear_palavra(interaction: discord.Interaction, palavra: str):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-    palavras_proibidas.add(palavra.lower())
-    salvar_dados()
-    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** bloqueada!", ephemeral=True)
-
-# === DESBLOQUEAR PALAVRA ===
-@bot.tree.command(name="desbloquear-palavra", description="Libera uma palavra")
-@app_commands.describe(palavra="Palavra para liberar")
-async def desbloquear_palavra(interaction: discord.Interaction, palavra: str):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-    palavras_proibidas.discard(palavra.lower())
-    salvar_dados()
-    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** liberada!", ephemeral=True)
-
-# === LISTAR PALAVRAS ===
-@bot.tree.command(name="lista-bloqueadas", description="Mostra todas as palavras bloqueadas")
-async def lista_bloqueadas(interaction: discord.Interaction):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-    if not palavras_proibidas:
-        await interaction.response.send_message("📋 Nenhuma palavra bloqueada!", ephemeral=True)
-        return
-    lista = "\n".join(f"• {p}" for p in palavras_proibidas)
-    await interaction.response.send_message(f"📋 Palavras bloqueadas:\n{lista}", ephemeral=True)
-
-# === LIGAR O BOT ===
+# === LIGAR ===
 token = os.getenv("DISCORD_TOKEN")
 if token:
     bot.run(token)
