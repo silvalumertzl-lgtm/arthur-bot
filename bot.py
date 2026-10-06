@@ -11,17 +11,22 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === PASTAS E ARQUIVOS ===
+# === PASTAS ===
 PASTA = "dados_sistema"
+PASTA_BACKUPS = os.path.join(PASTA, "backups_automáticos")
+
 if not os.path.exists(PASTA):
     os.makedirs(PASTA)
     print(f"📁 Pasta criada: {PASTA}")
+if not os.path.exists(PASTA_BACKUPS):
+    os.makedirs(PASTA_BACKUPS)
+    print(f"📁 Pasta de backups: {PASTA_BACKUPS}")
 
 ARQ_TICKETS = os.path.join(PASTA, "tickets.json")
 ARQ_PRODUTOS = os.path.join(PASTA, "produtos.json")
 ARQ_COMPRAS = os.path.join(PASTA, "compras.json")
 
-# === CARREGAR DADOS ===
+# === CARREGAR ===
 def carregar(arquivo, padrao):
     if os.path.exists(arquivo):
         with open(arquivo, "r", encoding="utf-8") as f:
@@ -37,17 +42,32 @@ def salvar_ticket(dados):
     tickets.append(dados)
     with open(ARQ_TICKETS, "w", encoding="utf-8") as f:
         json.dump(tickets, f, ensure_ascii=False, indent=2)
-    print(f"🎫 TICKET: {dados['usuario']} | {dados['canal']} | {dados['data']}")
+    print(f"🎫 Ticket salvo: {dados['usuario']}")
 
 def salvar_produto(dados):
     produtos[dados["id"]] = dados
     with open(ARQ_PRODUTOS, "w", encoding="utf-8") as f:
         json.dump(produtos, f, ensure_ascii=False, indent=2)
-    print(f"📦 PRODUTO: {dados['id']} | {dados['nome']} | R$ {dados['preco']:.2f}")
+    print(f"📦 Produto salvo: {dados['nome']}")
 
 def salvar_compras():
     with open(ARQ_COMPRAS, "w", encoding="utf-8") as f:
         json.dump(compras, f, ensure_ascii=False, indent=2)
+
+# === BACKUP AUTOMÁTICO ===
+def fazer_backup_automático():
+    data = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    tudo = {
+        "data_backup": data,
+        "tickets": tickets,
+        "produtos": produtos,
+        "compras": compras
+    }
+    caminho = os.path.join(PASTA_BACKUPS, f"backup_{data}.json")
+    with open(caminho, "w", encoding="utf-8") as f:
+        json.dump(tudo, f, ensure_ascii=False, indent=2)
+    print(f"\n💾 BACKUP AUTOMÁTICO FEITO! ✅")
+    print(f"📂 Arquivo: backups_automáticos/backup_{data}.json\n")
 
 # === CONFIGS ===
 NOME_SUPORTE = "Suporte"
@@ -57,6 +77,10 @@ NOME_CLIENTE = "Cliente VIP"
 async def on_ready():
     print(f"\n{'='*45}")
     print(f"✅ BOT ONLINE — {bot.user}")
+    
+    # 🔹 FAZ BACKUP AUTOMÁTICO AO LIGAR!
+    fazer_backup_automático()
+    
     print(f"🎫 Tickets: {len(tickets)} | 📦 Produtos: {len(produtos)} | 👤 Compras: {len(compras)}")
     print(f"{'='*45}\n")
     try:
@@ -65,8 +89,8 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Sinc: {e}")
 
-# === 1️⃣ MENSAGEM COM BOTÃO DE ATENDIMENTO ===
-@bot.tree.command(name="atendimento", description="Coloca a mensagem de atendimento com botão")
+# === 1️⃣ ATENDIMENTO COM BOTÃO ===
+@bot.tree.command(name="atendimento", description="Coloca a mensagem de atendimento")
 async def atendimento(interaction: discord.Interaction):
     cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_SUPORTE)
     if not ((cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator):
@@ -84,21 +108,19 @@ async def atendimento(interaction: discord.Interaction):
         def __init__(self):
             super().__init__(timeout=None)
 
-        @discord.ui.button(label="Abrir Ticket", style=discord.ButtonStyle.green, emoji="🎫", custom_id="abrir_ticket_btn")
-        async def abrir_ticket_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+        @discord.ui.button(label="Abrir Ticket", style=discord.ButtonStyle.green, emoji="🎫")
+        async def abrir(self, inter: discord.Interaction, button):
             await inter.response.defer(ephemeral=True)
-
-            # Verificar se já tem aberto
+            
             for canal in inter.guild.channels:
                 if isinstance(canal, discord.TextChannel) and canal.topic == f"Ticket de {inter.user.name}":
                     await inter.followup.send(f"⚠️ Já tem aberto: {canal.mention}", ephemeral=True)
                     return
 
-            cargo_sup = discord.utils.get(inter.guild.roles, name=NOME_SUPORTE)
             perm = {
                 inter.guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 inter.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                bot.user: discord.PermissionOverwrite(read_messages=True)
             }
             if cargo_sup:
                 perm[cargo_sup] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -109,26 +131,24 @@ async def atendimento(interaction: discord.Interaction):
                 overwrites=perm
             )
 
-            # SALVAR TICKET
             dados = {
                 "usuario": inter.user.name,
                 "usuario_id": inter.user.id,
                 "canal": canal.name,
                 "canal_id": canal.id,
-                "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                "status": "aberto"
+                "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             }
             salvar_ticket(dados)
 
-            await canal.send(f"✅ Bem-vindo, {inter.user.mention}!\nExplique o que precisa que a equipe vai atender! 💜")
+            await canal.send(f"✅ Bem-vindo, {inter.user.mention}!\nExplique o que precisa! 💜")
             if cargo_sup:
-                await canal.send(f"{cargo_sup.mention} — Novo ticket criado!")
+                await canal.send(f"{cargo_sup.mention} — Novo ticket!")
 
-            await inter.followup.send(f"✅ Ticket criado! → {canal.mention}", ephemeral=True)
+            await inter.followup.send(f"✅ Criado: {canal.mention}", ephemeral=True)
 
     await interaction.response.send_message(embed=embed, view=BotaoAtendimento())
 
-# === 2️⃣ CADASTRAR PRODUTO ===
+# === 2️⃣ NOVO PRODUTO ===
 @bot.tree.command(name="novo-produto", description="Cadastrar produto")
 @app_commands.describe(nome="Nome", preco="Valor", estoque="Quantidade", pix="Chave PIX", imagem="Link da foto")
 async def novo_produto(inter: discord.Interaction, nome: str, preco: float, estoque: int, pix: str, imagem: str=None):
@@ -195,8 +215,8 @@ async def ranking(inter: discord.Interaction):
         emb.add_field(name=f"{med} {user.name}", value=f"🛒 {qtd} compra{'s' if qtd>1 else ''}", inline=False)
     await inter.response.send_message(embed=emb)
 
-# === 5️⃣ BACKUP — BAIXAR TUDO NO CELULAR 📱===
-@bot.tree.command(name="backup", description="Baixar backup de TODOS os dados")
+# === 5️⃣ BACKUP MANUAL — BAIXAR NO CELULAR 📱===
+@bot.tree.command(name="backup", description="Baixar backup completo")
 async def backup(inter: discord.Interaction):
     cargo_sup = discord.utils.get(inter.guild.roles, name=NOME_SUPORTE)
     if not ((cargo_sup and cargo_sup in inter.user.roles) or inter.user.guild_permissions.administrator):
@@ -204,34 +224,28 @@ async def backup(inter: discord.Interaction):
         return
 
     data = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-    nome_arquivo = f"backup_completo_{data}.json"
+    nome_arq = f"backup_completo_{data}.json"
 
     tudo = {
         "data_backup": data,
         "tickets": tickets,
         "produtos": produtos,
-        "compras": compras,
-        "estatisticas": {
-            "total_tickets": len(tickets),
-            "total_produtos": len(produtos),
-            "total_compradores": len(compras)
-        }
+        "compras": compras
     }
 
-    caminho = os.path.join(PASTA, nome_arquivo)
+    caminho = os.path.join(PASTA, nome_arq)
     with open(caminho, "w", encoding="utf-8") as f:
         json.dump(tudo, f, ensure_ascii=False, indent=2)
 
-    arquivo = discord.File(caminho, filename=nome_arquivo)
+    arquivo = discord.File(caminho, filename=nome_arq)
 
     emb = discord.Embed(title="💾 BACKUP COMPLETO", color=discord.Color.gold())
-    emb.add_field(name="🎫 Tickets", value=f"{len(tickets)}", inline=True)
-    emb.add_field(name="📦 Produtos", value=f"{len(produtos)}", inline=True)
-    emb.add_field(name="👤 Compradores", value=f"{len(compras)}", inline=True)
-    emb.set_footer(text=f"Arquivo: {nome_arquivo}")
+    emb.add_field(name="🎫 Tickets", value=str(len(tickets)), inline=True)
+    emb.add_field(name="📦 Produtos", value=str(len(produtos)), inline=True)
+    emb.add_field(name="👤 Compradores", value=str(len(compras)), inline=True)
 
     await inter.response.send_message(embed=emb, file=arquivo, ephemeral=True)
-    print(f"💾 BACKUP GERADO: {nome_arquivo} | {inter.user.name}")
+    print(f"💾 Backup baixado por: {inter.user.name}")
 
 # === LIGAR ===
 token = os.getenv("DISCORD_TOKEN")
