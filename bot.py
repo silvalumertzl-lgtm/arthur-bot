@@ -11,10 +11,11 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # === CONFIGURAÇÕES ===
-NOME_CARGO_SUPORTE = "Suporte"  # ← Nome EXATO do cargo que criou
+NOME_CARGO_SUPORTE = "Suporte"       # ← Nome EXATO do cargo
+NOME_CARGO_CLIENTE = "Cliente VIP"   # ← Nome EXATO do cargo
 palavras_proibidas = set()
+compradores = {}
 
-# === QUANDO LIGAR ===
 @bot.event
 async def on_ready():
     print(f"✅ Bot {bot.user} tá online!")
@@ -24,7 +25,7 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Erro: {e}")
 
-# === SISTEMA DE TICKET ===
+# === SISTEMA DE TICKET — SUPORTE ENTRA SOZINHO ===
 @bot.tree.command(name="setup-ticket", description="Coloca o sistema de ticket neste canal")
 async def setup_ticket(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -49,12 +50,25 @@ async def setup_ticket(interaction: discord.Interaction):
                     )
                     return
 
-            # Permissões do canal
+            # PEGA O CARGO DE SUPORTE
+            cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+            
+            # PERMISSÕES — SUPORTE JÁ ENTRA VENDO E FALANDO
             overwrites = {
-                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),  # Todos os outros não veem
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),  # Quem abriu vê
+                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),  # O bot vê
             }
+            
+            # ✅ ADICIONA O CARGO DE SUPORTE AUTOMATICAMENTE
+            if cargo_suporte:
+                overwrites[cargo_suporte] = discord.PermissionOverwrite(
+                    read_messages=True,
+                    send_messages=True,
+                    manage_messages=True,
+                    embed_links=True,
+                    attach_files=True
+                )
 
             canal_ticket = await interaction.guild.create_text_channel(
                 name=f"ticket-{interaction.user.name}",
@@ -62,12 +76,21 @@ async def setup_ticket(interaction: discord.Interaction):
                 overwrites=overwrites
             )
 
-            # Mensagem interna + botão de fechar
-            embed_interno = discord.Embed(
-                title="🎫 Ticket Aberto",
-                description=f"Olá {interaction.user.mention}!\nExplique o que precisa que a equipe vai atender! 📩",
-                color=discord.Color.green()
-            )
+            # Verifica se é Equipe ou Cliente
+            e_equipe = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
+
+            if e_equipe:
+                embed_interno = discord.Embed(
+                    title="🛡️ TICKET — EQUIPE",
+                    description=f"Abrido por: {interaction.user.mention}\nFunção: **Equipe/Suporte**",
+                    color=discord.Color.blue()
+                )
+            else:
+                embed_interno = discord.Embed(
+                    title="🎫 TICKET — CLIENTE",
+                    description=f"Olá {interaction.user.mention}!\nExplique o que precisa que a equipe vai atender! 📩",
+                    color=discord.Color.green()
+                )
 
             class TicketFecharView(discord.ui.View):
                 def __init__(self):
@@ -75,11 +98,11 @@ async def setup_ticket(interaction: discord.Interaction):
 
                 @discord.ui.button(label="Fechar Ticket", style=discord.ButtonStyle.red, emoji="🔒", custom_id="fechar_ticket")
                 async def fechar_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-                    cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-                    e_equipe = cargo_suporte and cargo_suporte in interaction.user.roles
+                    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+                    e_equipe_agora = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
                     e_dono = interaction.user.name in (canal_ticket.topic or "")
 
-                    if not (e_dono or e_equipe):
+                    if not (e_dono or e_equipe_agora):
                         await interaction.response.send_message(
                             "❌ Apenas a equipe ou quem abriu pode fechar!",
                             ephemeral=True
@@ -91,10 +114,9 @@ async def setup_ticket(interaction: discord.Interaction):
 
             await canal_ticket.send(embed=embed_interno, view=TicketFecharView())
 
-            # ✅ NOTIFICA O CARGO DE SUPORTE
-            cargo = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-            if cargo:
-                await canal_ticket.send(f"{cargo.mention} — Novo ticket aberto!")
+            # AVISA A EQUIPE
+            if cargo_suporte and not e_equipe:
+                await canal_ticket.send(f"{cargo_suporte.mention} — Novo ticket aberto!")
 
             await interaction.response.send_message(
                 f"✅ Ticket criado! → {canal_ticket.mention}",
@@ -120,45 +142,102 @@ async def novo_produto(
     pix: str,
     imagem: str = None
 ):
-    # Verifica se tem cargo de Suporte OU é Administrador
-    cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
 
     if not tem_permissao:
-        await interaction.response.send_message(
-            "❌ Apenas a Equipe/Suporte pode cadastrar produtos!",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Apenas a Equipe pode cadastrar produtos!", ephemeral=True)
         return
 
     embed = discord.Embed(title=f"📦 {nome}", color=discord.Color.green())
     embed.add_field(name="💲 Preço", value=f"R$ {preco}", inline=True)
     embed.add_field(name="📦 Estoque", value=estoque, inline=True)
     embed.add_field(name="💳 PIX", value=f"`{pix}`", inline=False)
-    
-    # ⚠️ MENSAGEM IMPORTANTE QUE TU PEDIU
     embed.add_field(
         name="📩 Como receber",
-        value="**Após efetuar o pagamento, abra um ticket para receber seu produto!**",
+        value="**Após pagar, abra um ticket para receber seu produto!**",
         inline=False
     )
-
     if imagem:
         embed.set_image(url=imagem)
 
     await interaction.response.send_message(embed=embed)
 
-# === SISTEMA ANTI-PALAVRÃO ===
+# === DAR CARGO DE CLIENTE ===
+@bot.tree.command(name="dar-cliente", description="Dá cargo de cliente e registra compra")
+@app_commands.describe(usuario="Pessoa que comprou")
+async def dar_cliente(interaction: discord.Interaction, usuario: discord.Member):
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
+
+    if not tem_permissao:
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return
+
+    cargo_cliente = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_CLIENTE)
+    if not cargo_cliente:
+        await interaction.response.send_message(
+            f"⚠️ Cria o cargo **'{NOME_CARGO_CLIENTE}'** primeiro no Discord!",
+            ephemeral=True
+        )
+        return
+
+    if cargo_cliente not in usuario.roles:
+        await usuario.add_roles(cargo_cliente)
+
+    compradores[usuario.id] = compradores.get(usuario.id, 0) + 1
+
+    await interaction.response.send_message(
+        f"✅ {usuario.mention} recebeu o cargo de Cliente!\n🛒 Total de compras: **{compradores[usuario.id]}**",
+        ephemeral=False
+    )
+
+# === RANKING ===
+@bot.tree.command(name="ranking", description="Mostra quem mais comprou")
+async def ranking(interaction: discord.Interaction):
+    if not compradores:
+        await interaction.response.send_message("📋 Nenhuma compra registrada ainda!", ephemeral=True)
+        return
+
+    top = sorted(compradores.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    embed = discord.Embed(title="🏆 RANKING — MAIS COMPRARAM", color=discord.Color.gold())
+    for pos, (user_id, qtd) in enumerate(top, 1):
+        user = await bot.fetch_user(user_id)
+        medalha = {1: "🥇", 2: "🥈", 3: "🥉"}.get(pos, f"{pos}°")
+        embed.add_field(
+            name=f"{medalha} {user.name}",
+            value=f"🛒 {qtd} compra{'s' if qtd>1 else ''}",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed)
+
+# === LIMPAR CANAL ===
+@bot.tree.command(name="limpar", description="Apaga TODAS as mensagens do canal")
+async def limpar(interaction: discord.Interaction):
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
+
+    if not tem_permissao:
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return
+
+    await interaction.response.send_message("⚠️ Apagando tudo em 5 segundos...", ephemeral=True)
+    
+    deleted = await interaction.channel.purge(limit=None)
+    await interaction.channel.send(f"✅ Canal limpo! {len(deleted)} mensagens apagadas!", delete_after=5)
+
+# === ANTI-PALAVRÃO ===
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return  # Ignora mensagens do bot
+    if message.author.bot or not message.guild:
+        return
 
-    cargo_suporte = discord.utils.get(message.guild.roles, name=NOME_CARGO_SUPORTE) if message.guild else None
-    if cargo_suporte and cargo_suporte in message.author.roles:
-        return  # Equipe não é punida
+    cargo_sup = discord.utils.get(message.guild.roles, name=NOME_CARGO_SUPORTE)
+    if cargo_sup and cargo_sup in message.author.roles:
+        return
 
-    # Verifica se tem palavra proibida
     texto = message.content.lower()
     for palavra in palavras_proibidas:
         if re.search(re.escape(palavra.lower()), texto):
@@ -171,46 +250,46 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# === ADICIONAR PALAVRA PROIBIDA ===
-@bot.tree.command(name="bloquear-palavra", description="Adiciona uma palavra proibida")
-@app_commands.describe(palavra="Palavra que quer bloquear")
+# === BLOQUEAR PALAVRA ===
+@bot.tree.command(name="bloquear-palavra", description="Bloqueia uma palavra")
+@app_commands.describe(palavra="Palavra proibida")
 async def bloquear_palavra(interaction: discord.Interaction, palavra: str):
-    cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
 
     if not tem_permissao:
-        await interaction.response.send_message("❌ Apenas a Equipe pode usar isso!", ephemeral=True)
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
         return
 
     palavras_proibidas.add(palavra.lower())
-    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** foi bloqueada!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** bloqueada!", ephemeral=True)
 
-# === REMOVER PALAVRA PROIBIDA ===
-@bot.tree.command(name="desbloquear-palavra", description="Remove uma palavra da lista")
-@app_commands.describe(palavra="Palavra que quer liberar")
+# === DESBLOQUEAR PALAVRA ===
+@bot.tree.command(name="desbloquear-palavra", description="Libera uma palavra")
+@app_commands.describe(palavra="Palavra para liberar")
 async def desbloquear_palavra(interaction: discord.Interaction, palavra: str):
-    cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
 
     if not tem_permissao:
-        await interaction.response.send_message("❌ Apenas a Equipe pode usar isso!", ephemeral=True)
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
         return
 
     palavras_proibidas.discard(palavra.lower())
-    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** foi liberada!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Palavra **'{palavra}'** liberada!", ephemeral=True)
 
-# === LISTAR PALAVRAS BLOQUEADAS ===
-@bot.tree.command(name="lista-bloqueadas", description="Mostra todas as palavras bloqueadas")
+# === LISTAR PALAVRAS ===
+@bot.tree.command(name="lista-bloqueadas", description="Mostra palavras bloqueadas")
 async def lista_bloqueadas(interaction: discord.Interaction):
-    cargo_suporte = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_suporte and cargo_suporte in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
 
     if not tem_permissao:
         await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
         return
 
     if not palavras_proibidas:
-        await interaction.response.send_message("📋 Nenhuma palavra bloqueada ainda!", ephemeral=True)
+        await interaction.response.send_message("📋 Nenhuma palavra bloqueada!", ephemeral=True)
         return
 
     lista = "\n".join(f"• {p}" for p in palavras_proibidas)
