@@ -15,7 +15,7 @@ NOME_CARGO_SUPORTE = "Suporte"
 NOME_CARGO_CLIENTE = "Cliente VIP"
 palavras_proibidas = set()
 compradores = {}
-produtos = {}  # Guarda os produtos criados
+produtos = {}
 
 @bot.event
 async def on_ready():
@@ -103,11 +103,11 @@ async def setup_ticket(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, view=TicketAbrirView())
 
-# === SISTEMA DE PRODUTO COM BOTÃO COMPRAR ===
+# === SISTEMA DE PRODUTO COM COMPRAR ===
 @bot.tree.command(name="novo-produto", description="Cadastra um produto novo")
 @app_commands.describe(
     nome="Nome do produto",
-    preco="Preço unitário (apenas número, ex: 50 ou 2.50)",
+    preco="Preço unitário (ex: 50 ou 2.50)",
     estoque="Quantidade disponível",
     pix="Chave PIX para pagamento",
     imagem="Link da foto (opcional)"
@@ -131,7 +131,6 @@ async def novo_produto(
         "nome": nome,
         "preco": preco,
         "estoque": estoque,
-        "estoque_inicial": estoque,
         "pix": pix,
         "imagem": imagem
     }
@@ -152,13 +151,9 @@ async def novo_produto(
         async def comprar(self, interaction: discord.Interaction, button: discord.ui.Button):
             prod = produtos.get(produto_id)
             if not prod or prod["estoque"] <= 0:
-                await interaction.response.send_message(
-                    "❌ Produto esgotado!",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ Produto esgotado!", ephemeral=True)
                 return
 
-            # === SELECIONAR QUANTIDADE ===
             class QuantidadeModal(discord.ui.Modal, title="Quantidade"):
                 quantidade = discord.ui.TextInput(
                     label="Quantas unidades você quer?",
@@ -172,19 +167,11 @@ async def novo_produto(
                     try:
                         qtd = int(self.quantidade.value)
                     except ValueError:
-                        await modal_interaction.response.send_message(
-                            "❌ Digite apenas números!",
-                            ephemeral=True
-                        )
+                        await modal_interaction.response.send_message("❌ Digite apenas números!", ephemeral=True)
                         return
-
                     if qtd <= 0:
-                        await modal_interaction.response.send_message(
-                            "❌ Quantidade inválida!",
-                            ephemeral=True
-                        )
+                        await modal_interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
                         return
-
                     if qtd > prod["estoque"]:
                         await modal_interaction.response.send_message(
                             f"❌ Só temos {prod['estoque']} unidades disponíveis!",
@@ -192,55 +179,47 @@ async def novo_produto(
                         )
                         return
 
-                    # Calcula valor total
                     total = prod["preco"] * qtd
-                    prod["estoque"] -= qtd  # Diminui do estoque
+                    prod["estoque"] -= qtd
 
-                    # Mensagem de pagamento — SÓ A PESSOA VÊ
-                    embed_pagamento = discord.Embed(
-                        title="✅ PEDIDO REALIZADO",
-                        color=discord.Color.gold()
-                    )
-                    embed_pagamento.add_field(
-                        name="📦 Produto",
-                        value=prod["nome"],
-                        inline=False
-                    )
-                    embed_pagamento.add_field(
-                        name="🔢 Quantidade",
-                        value=f"{qtd} unidade{'s' if qtd>1 else ''}",
-                        inline=True
-                    )
-                    embed_pagamento.add_field(
-                        name="💲 Valor Unitário",
-                        value=f"R$ {prod['preco']:.2f}",
-                        inline=True
-                    )
-                    embed_pagamento.add_field(
-                        name="💰 TOTAL A PAGAR",
-                        value=f"**R$ {total:.2f}**",
-                        inline=False
-                    )
-                    embed_pagamento.add_field(
-                        name="💳 Chave PIX",
-                        value=f"`{prod['pix']}`",
-                        inline=False
-                    )
+                    embed_pagamento = discord.Embed(title="✅ PEDIDO REALIZADO", color=discord.Color.gold())
+                    embed_pagamento.add_field(name="📦 Produto", value=prod["nome"], inline=False)
+                    embed_pagamento.add_field(name="🔢 Quantidade", value=f"{qtd} unidade{'s' if qtd>1 else ''}", inline=True)
+                    embed_pagamento.add_field(name="💲 Valor Unitário", value=f"R$ {prod['preco']:.2f}", inline=True)
+                    embed_pagamento.add_field(name="💰 TOTAL A PAGAR", value=f"**R$ {total:.2f}**", inline=False)
+                    embed_pagamento.add_field(name="💳 Chave PIX", value=f"`{prod['pix']}`", inline=False)
                     embed_pagamento.add_field(
                         name="📩 Instruções",
                         value="Após pagar, abra um ticket e envie o comprovante!",
                         inline=False
                     )
-
-                    await modal_interaction.response.send_message(
-                        embed=embed_pagamento,
-                        ephemeral=True  # ✅ SÓ A PESSOA VÊ!
-                    )
+                    await modal_interaction.response.send_message(embed=embed_pagamento, ephemeral=True)
 
             await interaction.response.send_modal(QuantidadeModal())
 
     await interaction.channel.send(embed=embed, view=ComprarView())
     await interaction.response.send_message("✅ Produto publicado!", ephemeral=True)
+
+# === LIMPAR SÓ O CANAL ATUAL — NÃO MEXE EM MAIS NADA! ===
+@bot.tree.command(name="limpar", description="Apaga mensagens SOMENTE neste canal")
+@app_commands.describe(quantidade="Número de mensagens para apagar (deixe vazio para apagar tudo)")
+async def limpar(interaction: discord.Interaction, quantidade: int = None):
+    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
+    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
+    if not tem_permissao:
+        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return
+
+    # ✅ SÓ APAGA O CANAL QUE TU TÁ! NUNCA MAIS O SERVIDOR INTEIRO!
+    limite = quantidade if quantidade else None
+    await interaction.response.send_message("⚠️ Apagando mensagens...", ephemeral=True)
+    
+    deleted = await interaction.channel.purge(limit=limite)
+    await interaction.channel.send(
+        f"✅ Canal limpo! {len(deleted)} mensagens apagadas!\n"
+        f"📍 Canal: **{interaction.channel.name}** — Somente aqui!",
+        delete_after=5
+    )
 
 # === DAR CARGO DE CLIENTE ===
 @bot.tree.command(name="dar-cliente", description="Dá cargo de cliente e registra compra")
@@ -287,19 +266,6 @@ async def ranking(interaction: discord.Interaction):
             inline=False
         )
     await interaction.response.send_message(embed=embed)
-
-# === LIMPAR CANAL ===
-@bot.tree.command(name="limpar", description="Apaga TODAS as mensagens do canal")
-async def limpar(interaction: discord.Interaction):
-    cargo_sup = discord.utils.get(interaction.guild.roles, name=NOME_CARGO_SUPORTE)
-    tem_permissao = (cargo_sup and cargo_sup in interaction.user.roles) or interaction.user.guild_permissions.administrator
-    if not tem_permissao:
-        await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-        return
-
-    await interaction.response.send_message("⚠️ Apagando tudo em 5 segundos...", ephemeral=True)
-    deleted = await interaction.channel.purge(limit=None)
-    await interaction.channel.send(f"✅ Canal limpo! {len(deleted)} mensagens apagadas!", delete_after=5)
 
 # === ANTI-PALAVRÃO ===
 @bot.event
